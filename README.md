@@ -14,7 +14,7 @@ This is an AMX Mod X plugin developed for the DMCTV server which uploads player 
 ## Requirements
 
 - AMX Mod X (tested on 1.8.2, might work on other versions)
-- Remote SQL database with the following structure:
+- SQL database with the following structure:
 
 ```sql
 CREATE TABLE IF NOT EXISTS player_stats (
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS player_stats (
     kills INT UNSIGNED NOT NULL DEFAULT 0,
     bot_kills INT UNSIGNED NOT NULL DEFAULT 0,
     deaths INT UNSIGNED NOT NULL DEFAULT 0,
-    bots_deaths INT UNSIGNED NOT NULL DEFAULT 0,
+    bot_deaths INT UNSIGNED NOT NULL DEFAULT 0,
     axe_kills INT UNSIGNED NOT NULL DEFAULT 0,
     shotgun_kills INT UNSIGNED NOT NULL DEFAULT 0,
     doubleshotgun_kills INT UNSIGNED NOT NULL DEFAULT 0,
