@@ -1,5 +1,5 @@
 /*
-	* DMCTV STATS
+	* DMC TV STATS
 	* Tracks kills (human/bot), deaths, and weapon-specific stats in Deathmatch Classic.
 	* Pushes data to remote SQL server asynchronously to avoid lag.
 	* Developed for DMCTV.NET by maxresdefault.
@@ -31,22 +31,23 @@ new Handle:g_sql_tuple;
 
 static const dmc_weapons[MAX_DMC_WEAPS][] = {
 	"axe", "shotgun", "doubleshotgun", "nailgun", "supernail", "grenadelauncher", "rocketlauncher", "lightninggun"
-};
+}; // Internally DMC uses some names like 'axe' instead of 'crowbar'
 
 public plugin_init() {
-	register_plugin("DMCTV Stats", "1.0", "maxresdefault");
+	register_plugin("DMC TV Stats", "1.1", "maxresdefault");
 	register_event("DeathMsg", "client_death", "a");
 	register_event("CurWeapon", "event_curweapon", "be", "1=1");
 	
 	if (!load_sql_config()) {
 		log_amx("[DMCTV Stats] Failed to load SQL config");
+		pause("c");
 		return;
 	}
 	
 	g_sql_tuple = SQL_MakeDbTuple(g_sql_host, g_sql_user, g_sql_pass, g_sql_db);
 }
 
-load_sql_config() {
+load_sql_config() { // Load DB info from config
 	new path[128];
 	get_configsdir(path, charsmax(path));
 	format(path, charsmax(path), "%s/dmctv_stats.cfg", path);
@@ -77,7 +78,9 @@ load_sql_config() {
 }
 
 public client_connect(id) {
-	reset_stats(id);
+	if (!is_user_bot(id)) {
+		reset_stats(id);
+	}
 }
 
 public client_disconnect(id) { // This will run at map change for players getting disconnected
@@ -129,7 +132,7 @@ public client_death() {
 	new killer = read_data(1);
 	new victim = read_data(2);
 	
-	if (killer <= 0 || killer > MAX_PLAYERS) { // If killer is out of bounds must be suicide, add a regular death
+	if ((killer <= 0 || killer > MAX_PLAYERS) && !is_user_bot(victim)) { // If killer is out of bounds must be suicide, add a regular death
 		g_deaths[victim]++;
 		return;
 	} else if (is_user_bot(killer) && is_user_bot(victim)) { // No need to run this code if it's just bots
@@ -147,7 +150,7 @@ public client_death() {
 	if (!is_user_bot(killer)) {
 		if (is_user_bot(victim)) {
 			g_bot_kills[killer]++;
-		} else {
+		} else if (victim != killer) { // If it is a suicide don't increase our player kill count
 			g_kills[killer]++;
 		}
 	}
@@ -169,7 +172,7 @@ stock get_dmc_weapon_index(const name[]) {
 save_stats(id) {
 	new steamid[32];
 	get_user_authid(id, steamid, charsmax(steamid));
-	if (equal(steamid, "UNKNOWN")) {
+	if (equali(steamid, "UNKNOWN") || steamid[0] == 0) { // If player is using pirated copy of game we shouldn't add them to database since they have no SteamID
 		return;
 	}
 	
