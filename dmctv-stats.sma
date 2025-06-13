@@ -34,7 +34,7 @@ static const dmc_weapons[MAX_DMC_WEAPS][] = {
 }; // Internally DMC uses some names like 'axe' instead of 'crowbar'
 
 public plugin_init() {
-	register_plugin("DMC TV Stats", "1.1", "maxresdefault");
+	register_plugin("DMC TV Stats", "1.2", "maxresdefault");
 	register_event("DeathMsg", "client_death", "a");
 	register_event("CurWeapon", "event_curweapon", "be", "1=1");
 	
@@ -132,8 +132,8 @@ public client_death() {
 	new killer = read_data(1);
 	new victim = read_data(2);
 	
-	if ((killer <= 0 || killer > MAX_PLAYERS) && !is_user_bot(victim)) { // If killer is out of bounds must be suicide, add a regular death
-		g_deaths[victim]++;
+	if ((killer <= 0 || killer > MAX_PLAYERS) && !is_user_bot(victim)) { // If killer is out of bounds must be suicide
+		client_suicide(victim);
 		return;
 	} else if (is_user_bot(killer) && is_user_bot(victim)) { // No need to run this code if it's just bots
 		return;
@@ -142,6 +142,8 @@ public client_death() {
 	if (!is_user_bot(victim)) {
 		if (is_user_bot(killer)) {
 			g_bot_deaths[victim]++;
+		} else if (killer == victim) {
+			client_suicide(victim); // Call our suicide handler when player kills themself
 		} else {
 			g_deaths[victim]++;
 		}
@@ -155,6 +157,17 @@ public client_death() {
 		}
 	}
 	process_weapon_usage(killer, g_last_weapon[killer]);
+}
+
+public client_suicide(id) {
+	new players[32], humanCount;
+	get_players(players, humanCount, "ch");
+	
+	if (humanCount > 1) { // When other players are connected affect the player KDR
+		g_deaths[id]++;
+	} else if (humanCount == 1) { // When playing solo affect bot KDR
+		g_bot_deaths[id]++;
+	}
 }
 
 stock process_weapon_usage(id, const szWeap[]) {
