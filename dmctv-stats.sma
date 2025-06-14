@@ -34,7 +34,7 @@ static const dmc_weapons[MAX_DMC_WEAPS][] = {
 }; // Internally DMC uses some names like 'axe' instead of 'crowbar'
 
 public plugin_init() {
-	register_plugin("DMC TV Stats", "1.2", "maxresdefault");
+	register_plugin("DMC TV Stats", "1.3", "maxresdefault");
 	register_event("DeathMsg", "client_death", "a");
 	register_event("CurWeapon", "event_curweapon", "be", "1=1");
 	
@@ -127,7 +127,6 @@ public event_curweapon(id) { // DMC does not provide weapon used in client_death
 	copy(g_last_weapon[id], charsmax(g_last_weapon[]), szFull);
 }
 
-
 public client_death() {
 	new killer = read_data(1);
 	new victim = read_data(2);
@@ -144,6 +143,7 @@ public client_death() {
 			g_bot_deaths[victim]++;
 		} else if (killer == victim) {
 			client_suicide(victim); // Call our suicide handler when player kills themself
+			return;
 		} else {
 			g_deaths[victim]++;
 		}
