@@ -1,7 +1,7 @@
 /*
 	* DMC TV STATS
-	* Tracks kills (human/bot), deaths, and weapon-specific stats in Deathmatch Classic.
-	* Pushes data to remote SQL server asynchronously to avoid lag.
+	* Tracks kills & deaths (human/bot), play time, and weapon-specific stats in Deathmatch Classic.
+	* Pushes data to an SQL server asynchronously to avoid lag.
 	* Developed for DMCTV.NET by maxresdefault.
 */
 #pragma semicolon 1
@@ -27,6 +27,10 @@ new g_deaths[MAX_PLAYERS + 1];
 new g_bot_deaths[MAX_PLAYERS + 1];
 new g_weapon_usage[MAX_PLAYERS + 1][MAX_DMC_WEAPS];
 
+new bool:g_skip_player[MAX_PLAYERS + 1] = false;
+new bool:g_upload_on_dcon = false;
+
+new g_active_queries = 0;
 new Handle:g_sql_tuple;
 
 static const dmc_weapons[MAX_DMC_WEAPS][] = {
@@ -34,17 +38,51 @@ static const dmc_weapons[MAX_DMC_WEAPS][] = {
 }; // Internally DMC uses some names like 'axe' instead of 'crowbar'
 
 public plugin_init() {
-	register_plugin("DMC TV Stats", "1.3", "maxresdefault");
+	register_plugin("DMC TV Stats", "R2.0", "maxresdefault");
 	register_event("DeathMsg", "client_death", "a");
 	register_event("CurWeapon", "event_curweapon", "be", "1=1");
 	
 	if (!load_sql_config()) {
-		log_amx("[DMCTV Stats] Failed to load SQL config");
+		log_amx("[DMCTV Stats]: Failed to load SQL config");
 		pause("c");
 		return;
 	}
 	
 	g_sql_tuple = SQL_MakeDbTuple(g_sql_host, g_sql_user, g_sql_pass, g_sql_db);
+	set_task(1.0, "setup_timer", 1); // We have to wait for CVAR's to init. I hate AMX
+}
+
+public plugin_end() { // Pop out a warning just in case something goes wrong
+	if (g_active_queries > 0) {
+		log_amx("[DMCTV Stats]: Warning! There are still %d active queries during plugin shutdown!", g_active_queries);
+	}
+}
+
+public setup_timer() {
+	g_upload_on_dcon = true; // A slight buffer before we upload anything
+	new g_time_limit = ((get_cvar_num("mp_timelimit") * 60) - 2);
+	set_task(float(g_time_limit), "round_end", 1);
+}
+
+public round_end() {
+	new g_time_left = get_timeleft(); // Check for map extension
+	if (g_time_left > 0) {
+		set_task((float(g_time_left) + 1.0), "round_end", 1); // Add a small buffer to make everything feel more consistent
+	} else {
+		g_upload_on_dcon = false; // Disable player disconnect uploads
+		new players[32], count;
+		get_players(players, count, "ch"); // Only reliable way to get list of all human id's
+		
+		for (new i = 0; i < count; i++) {
+			new id = players[i];
+			new session_time = get_user_time(id, 0);
+			if (session_time > 0) {
+				g_time_played[id] += session_time;
+			}
+			
+			save_stats(id);
+		}
+	}
 }
 
 load_sql_config() { // Load DB info from config
@@ -53,7 +91,7 @@ load_sql_config() { // Load DB info from config
 	format(path, charsmax(path), "%s/dmctv_stats.cfg", path);
 	
 	if (!file_exists(path)) {
-		log_amx("[DMCTV Stats] SQL config file not found: %s", path);
+		log_amx("[DMCTV Stats]: SQL config file not found: %s", path);
 		return 0;
 	}
 
@@ -77,25 +115,57 @@ load_sql_config() { // Load DB info from config
 	return 1;
 }
 
-public client_connect(id) {
+public client_putinserver(id) {
 	if (!is_user_bot(id)) {
-		reset_stats(id);
+		get_user_name(id, g_last_username[id], charsmax(g_last_username[]));
+		
+		if (!is_username_safe(g_last_username[id])) {
+			g_skip_player[id] = true;
+			new data[1];
+			data[0] = id;
+			set_task(5.0, "warn_bad_username", id, data, sizeof(data)); // Add a delay to wait for client to load in
+		}
 	}
 }
 
-public client_disconnect(id) { // This will run at map change for players getting disconnected
-	if (!is_user_bot(id)) {
+public client_disconnect(id) {
+	if (g_upload_on_dcon && !is_user_bot(id)) {
 		new session_time = get_user_time(id, 0);
 		if (session_time > 0) {
 			g_time_played[id] += session_time;
 		}
 		
-		get_user_name(id, g_last_username[id], charsmax(g_last_username[]));
 		save_stats(id);
 	}
 }
 
+public bool:is_username_safe(const username[]) { // We don't want weird usernames to screw up SQL queries
+	if (username[0] == 0) {
+		return false;
+	}
+	
+	for (new i = 0; username[i] != 0; i++) {
+		new c = username[i];
+		
+		if (c < 32 || c > 126) {
+			return false;
+		}
+		
+		if (c == '\'' || c == '"' || c == ';' || c == '\\') {
+			return false;
+		}
+	}
+	return true;
+}
+
+public warn_bad_username(data[]) {
+	new id = data[0];
+	client_print(id, print_chat, "[DMC TV Stats]: Your username contains invalid characters, your stats will not be uploaded");
+}
+
 reset_stats(id) {
+	g_last_username[id][0] = 0;
+	g_skip_player[id] = false;
 	g_kills[id] = 0;
 	g_bot_kills[id] = 0;
 	g_deaths[id] = 0;
@@ -170,12 +240,12 @@ public client_suicide(id) {
 	}
 }
 
-stock process_weapon_usage(id, const szWeap[]) {
+public process_weapon_usage(id, const szWeap[]) {
 	new idx = get_dmc_weapon_index(szWeap);
 	if (idx != -1) g_weapon_usage[id][idx]++;
 }
 
-stock get_dmc_weapon_index(const name[]) {
+public get_dmc_weapon_index(const name[]) {
 	for (new i = 0; i < MAX_DMC_WEAPS; i++) {
 		if (equal(name, dmc_weapons[i])) return i;
 	}
@@ -183,6 +253,11 @@ stock get_dmc_weapon_index(const name[]) {
 }
 
 save_stats(id) {
+	if (g_skip_player[id]) {
+		return;
+	}
+	log_amx("[DMC TV Stats]: Uploading data for: %s", g_last_username[id]);
+	
 	new steamid[32];
 	get_user_authid(id, steamid, charsmax(steamid));
 	if (equali(steamid, "UNKNOWN") || steamid[0] == 0) { // If player is using pirated copy of game we shouldn't add them to database since they have no SteamID
@@ -191,6 +266,8 @@ save_stats(id) {
 	
 	new query[1024];
 	new weapon_fields[512], weapon_values[512], weapon_updates[512];
+	new data[1];
+	data[0] = id;
 	
 	weapon_fields[0] = 0;
 	weapon_values[0] = 0;
@@ -216,12 +293,17 @@ save_stats(id) {
 		steamid, g_last_username[id], g_time_played[id], g_kills[id], g_bot_kills[id], g_deaths[id], g_bot_deaths[id], weapon_values,
 		g_last_username[id], g_time_played[id], g_kills[id], g_bot_kills[id], g_deaths[id], g_bot_deaths[id], weapon_updates
 	);
-	
-	SQL_ThreadQuery(g_sql_tuple, "query_callback", query);
+	g_active_queries++;
+	SQL_ThreadQuery(g_sql_tuple, "query_callback", query, data, sizeof(data));
 }
 
 public query_callback(FailState, Handle:query, error[], errcode, data[], datasize) {
+	g_active_queries--;
+	new id = data[0];
 	if (FailState != TQUERY_SUCCESS) {
-		log_amx("[DMCTV Stats] SQL Error: %s", error);
+		log_amx("[DMCTV Stats]: SQL Error: %s", error);
+	} else if (!g_upload_on_dcon) { // Print upload messages during talktime
+		client_print(0, print_chat, "[DMC TV Stats]: Uploaded data for: %s", g_last_username[id]); // Print upload messages during talktime
 	}
+	reset_stats(id);
 }
